@@ -1,0 +1,250 @@
+---
+title: "Which NYC Airlines Run Late the Most?"
+subtitle: "What a year of flight data actually shows"
+author: "Dhanush Nagesh"
+format: pdf
+editor: visual
+---
+
+```{r}
+#| message: false
+set.seed(67)
+
+library(tidyverse)
+library(nycflights13)
+library(infer)
+library(openintro)
+library(knitr)
+
+raw_rows <- nrow(flights)
+raw_cols <- ncol(flights)
+
+```
+
+## Problem 1 Data Source and Provenance
+
+The data analyzed in this report is sourced from the `nycflights13` package, which contains digital records of all flights departing from the three primary New York City metropolitan airports (JFK, EWR, and LGA) during the year 2013.
+
+Unit of Observation: An individual scheduled flight departing from a major NYC airport in 2013. Dataset Dimensions: The dataset contains `r raw_rows` rows and `r raw_cols` columns.
+
+### Main Research Question
+
+Do the average departure delays of flights leaving New York City in 2013 differ across different airline carriers, or can the observed differences from standard operational timings be attributed to random variation?
+
+### Key Variables Described
+
+1.  `dep_delay`: The departure delay of the flight in minutes. Negative values indicate an early departure, while positive values indicate a late departure. This is our primary outcome variable.
+2.  `carrier`: The two-letter unique carrier code identifying the airline operating the flight, for example, UA for United Airlines. This is our primary explanatory variable.
+3.  `name`: The full name of the airline company joined from airlines table.
+4.  `origin`: The airport code of departure within NYC (`EWR`, `JFK`, or `LGA`), which may act as an operational factor in delay times.
+5.  `distance`: The total distance of the flight in miles.
+6.  `month`: The month of departure (1 through 12). This helps control for seasonal travel spikes (like summer vacations or winter holidays) that might affect certain carriers.
+7.  `day`/`month`: The specific day of the month and the scheduled hour of departure in 24-hour format.
+
+## Problem 2 Import, Tidy, Transform, and Document the Data
+
+```{r}
+#| echo: true
+#| message: false
+
+# Join the flights dataset with the airlines table
+raw_joined <- flights |>
+  left_join(airlines, by = "carrier")
+
+# Identify the top 5 carriers by total flight volume to focus our scope
+top_carriers <- raw_joined |>
+  count(name, sort = TRUE) |> 
+  slice_max(n, n = 5) |>
+  pull(name)
+
+cleaned_flights <- raw_joined |>
+  filter(name %in% top_carriers) |>
+    filter(!is.na(dep_delay), !is.na(arr_delay)) |>
+  
+  # Created a structured categorical season variable from 'month'
+  mutate(
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5)  ~ "Spring",
+      month %in% c(6, 7, 8)  ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Fall"
+    ),
+    season = factor(season, levels = c("Winter", "Spring", "Summer", "Fall")),
+    
+  ) |>
+  
+  # Select our key variables 
+  select(name, dep_delay, arr_delay, month, day, hour, origin, season)
+
+# Create numerical summary table 
+carrier_summary <- cleaned_flights |>
+  group_by(name) |>
+  summarize(
+    n_flights = n(),
+    mean_delay = round(mean(dep_delay), 1),
+    median_delay = round(median(dep_delay), 1)
+  )
+
+
+# Numerical summary table for the report
+kable(carrier_summary, caption = "Summary of Departure Delays by Carrier")
+```
+
+Table 1 summarizes departure delay statistics by carrier.
+
+### Data Transformation and Cleaning Steps
+
+The raw flights dataset was joined with the airlines table using the carrier key to retrieve full airline names in place of two-letter codes.Then we restricted the analysis to the five highest-volume carriers by total flight count.Carriers with very few flights were excluded since small sample sizes can produce unstable and misleading estimates.
+
+Before filtering, the dataset contained `r sum(is.na(flights$dep_delay))` flights with missing departure delay values, these represent cancelled or non-departed flights. These rows were excluded since departure delay is undefined for flights that never left the gate. Rows missing arrival delay were removed for the same reason.
+
+A season variable was created from month to enable seasonal comparisons for later. The final cleaned dataset contains `r nrow(cleaned_flights)` rows and `r ncol(cleaned_flights)` columns.
+
+## Question 3 Exploratory Data Analysis and Visualization
+
+### Figure 1: Distribution of the Departure Delays
+
+```{r}
+#| echo: true
+#| warning: false
+
+ggplot(cleaned_flights, aes(x = dep_delay)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "white") +
+  xlim(-20, 120) +
+  labs(
+    title = "Distribution of Flight Departure Delays",
+    x = "Departure Delay (minutes)",
+    y = "Count of Flights"
+  )
+```
+
+Figure 1 shows that the departure delays are right-skewed. Most of the flights cluster around zero or have slight negative values, which means they left a few minutes early or exactly on time. However, there is a very long tail to the right showing that some flights face major operational delays.
+
+### Figure 2: Scatterplot of departure delays versus arrival delays
+
+```{r}
+#| echo: true
+#| warning: false
+
+ggplot(cleaned_flights, aes(x = dep_delay, y = arr_delay, color = name)) +
+  geom_point() +
+  labs(
+    title = "Arrival Delay vs. Departure Delay by Carrier",
+    x = "Departure Delay (minutes)",
+    y = "Arrival Delay (minutes)",
+    color = "Airline Name"
+  )
+```
+
+Figure 2 shows a strong, positive relationship between departure delay and arrival delay. The dots for all airlines form a clear linear diagonal line. This means that if a carrier leaves late, it almost always arrives late too. They cannot easily make up time while flying.
+
+### Figure 3: Boxplots comparing departure delays across different carriers.
+
+```{r}
+#| echo: true
+#| warning: false
+
+ggplot(cleaned_flights, aes(x = name, y = dep_delay, fill = name)) +
+  geom_boxplot() +
+  ylim(-15, 50) +
+  labs(
+    title = "Comparing Departure Delays by Carrier",
+    x = "Airline Carrier",
+    y = "Departure Delay (minutes)"
+  ) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+Figure 3 uses boxplots to directly answer our research question. While the median line for all five carriers stays near zero, the vertical height of the boxes is different. JetBlue and ExpressJet have larger boxes and higher upper borders, showing that their departure delays vary more and they tend to have larger delays compared to Delta or American Airlines.
+
+## Question 4 Study Design, Bias, and Scope of Claims
+
+-   Is the data observational or experimental? Explain.
+
+This study is an observational study rather than an experimental design. Because we are simply collecting and observiving data from real-worled operations that already occured.
+
+-   What population, process, or real-world setting do you want to learn about?
+
+The population and process we want to learn about is the broader system of commercial aviation infrastructure in the United States, specifically focusing on major, high-volume congested metropolitan airports
+
+-   What sampling, measurement, missing-data, or survivorship issues might affect conclusions?
+
+Survivorship bias may be present because thousands of flights were dropped because they were missing departure delay data. In aviation, these missing entries represent flights that were completely cancelled or permanently diverted. Dropping them introduces survivorship bias because the flights that experienced the absolute worst failures "did not survive" into our final dataset. In result, our averages likely underestimate the true scale of airline delays.
+
+-   Name at least one plausible confounding variable.
+
+A major confounding variable in this study is the scheduled departure hour of the flights. Airport traffic naturally builds up over the course of a day, meaning that flights scheduled for late afternoon or evening are significantly more likely to face delays than flights scheduled for early mornings. If certain carriers happen to hold a higher proportion of late-day flight slots in New York, their average delays will look worse simply because of when they fly, rather than how efficiently they operate.
+
+-   State whether causal claims are justified. If they are not, rewrite your research question as an associational claim.
+
+Because this is an observational study with clear confounding variables, causal claims are not justified. I am revising my initial research question from question 1 into an associational claim: "Are certain airline carriers associated with higher average departure delays out of New York City airports during the winter and summer seasons?"
+
+## Question 5 Statistical Inference
+
+### Parameter in Context
+
+The parameter of interest is $\mu_{EV} - \mu_{DL}$: the true difference in population mean departure delays (in minutes) between ExpressJet Airlines (EV) and Delta Air Lines (DL) for flights departing New York City airports.
+
+### Simulation Design
+
+We treat our cleaned sample data as a mini-population. The computer will resample observations from this dataset with replacement 1,000 times, calculating the difference in mean departure delays for each bootstrap. This builds a bootstrap distribution that simulates the variability of our sample statistic.
+
+```{r}
+#| echo: true
+#| warning: false
+
+# Filter the dataset to isolate our highest and lowest delay carriers
+bootstrap_data <- raw_joined |> 
+  filter(carrier == "EV" | carrier == "DL") |> 
+  filter(!is.na(dep_delay)) |> 
+  mutate(name = factor(name))
+
+level_names <- levels(bootstrap_data$name)
+
+# Generate bootstrap distribution by resampling with replacement 1,000 times
+boot_dist <- bootstrap_data |> 
+  specify(dep_delay ~ name) |> 
+  generate(reps = 1000, type = "bootstrap") |> 
+  calculate(stat = "diff in means", order = c(level_names[1], level_names[2]))
+
+# Calculate the 95% confidence interval 
+percentile_ci <- boot_dist |> 
+  get_confidence_interval(level = 0.95, type = "percentile")
+
+ci_lower <- round(percentile_ci$lower_ci[1], 2)
+ci_upper <- round(percentile_ci$upper_ci[1], 2)
+
+```
+
+### Bootstrap distribution of the difference in mean departure delays with the 95% confidence interval shaded.
+
+```{r}
+#| echo: true
+#| warning: false
+
+# Visualize the bootstrap distribution and shade the confidence interval bounds
+visualize(boot_dist) +
+  shade_confidence_interval(endpoints = percentile_ci) +
+  labs(
+    title = "Bootstrap Distribution for Difference in Means",
+    subtitle = "95% Confidence Interval (ExpressJet - Delta)",
+    x = "Resampled Difference in Mean Departure Delay (minutes)",
+    y = "Count"
+)
+```
+
+-   95% Confidence Interval: (`r ci_lower` minutes, `r ci_upper` minutes)
+
+Interpretation in Context: We are 95% confident that the true population mean departure delay for ExpressJet Airlines flights leaving NYC is between `r ci_lower` and `r ci_upper` minutes longer than the true population mean departure delay for Delta Air Lines flights.
+
+Practical Importance: Because the entire interval is positive and sits well above zero, we can conclude that the operational gap between these two carriers is statistically discernable and practically meaningful. A difference of roughly 9 to 11 minutes per flight means that over thousands of departures, ExpressJet accumulates more ground delays compared to Delta.
+
+Uncertainty: While this interval provides a good estimate of the operational difference in 2013, the uncertainty lies in its scope. Since the dataset spans one year we can't account for seasonal storms or airfield changes that may affect carrier performance in future years.
+
+## Question 6 Communication and Final Answer
+
+This report examines whether departure delays are associated with airline carrier among flights departing NYC in 2013.After cleaning the nycflights13 dataset, we tracked the 5 largest carriers all year round Departure delays varied across the five carriers, with mean delays ranging from 10.1 minutes for Delta to 19.8 minutes for ExpressJet.
+
+The strongest supporting evidence comes from two analyses. Firstly, the summary table highlighted that ExpressJet Airlines experienced the highest mean departure delay of approximately 19.8 minutes, whereas Delta Air had the lowest at 10.1 minutes. Second, exploratory boxplots visually showed that while median delays cluster around zero for all airlines, the vertical spread and upper quartiles for JetBlue Airways and ExpressJet are much wider. Finally, a bootstrap analysis comparing the highest and lowest delay carriers generated a 95% confidence interval for the true difference in means spanning from roughly `r ci_lower` to `r ci_upper` minutes. Because this entire interval is positive and above zero, it provides strong evidence that ExpressJet accumulates higher average delays than Delta.
+
+A limitation to this study is survivorship bias. Thousands of observations were removed from the cleaned dataset because they were missing delay records, which means that the flight was ultimately canceled. Removing these rows means our calculated average actually understimates the true severity of airport delays. Furthermore, because this is an observational study, causal claims are not justified. So we cannot assert that booking a specific carrier causes a delay due to confounding variables like scheduled departure hours and air traffic. A recommended follow up analysis based off my findings is to calculate average delays across different scheduled departure hours and origin airports. Visualizing these findings will allow us to evaluate whether certain carriers experience worse delays purely due to peak-hour airport traffic or origin airport.
